@@ -1,22 +1,23 @@
+
 {
-"name": "mercado-auto-backend",
-"version": "1.0.0",
-"private": true,
-"description": "Backend de gestion des tâches et statistiques de MERCADO AUTO",
-"main": "server.js",
-"engines": {
-"node": ">=20"
-},
-"scripts": {
-"start": "node server.js",
-"dev": "node --watch server.js"
-},
-"dependencies": {
-"cors": "^2.8.5",
-"dotenv": "^16.6.1",
-"express": "^5.1.0",
-"express-rate-limit": "^8.0.1",
-"helmet": "^8.1.0",
-"pg": "^8.16.3"
-}
+  "name": "mercado-auto-backend",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Backend MERCADO AUTO pour les commandes MERCADO, Telegram, CamerPay et CJ Dropshipping",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
+    "pg": "^8.16.3"
+  }
 }
