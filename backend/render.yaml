@@ -1,0 +1,30 @@
+
+services:
+  - type: web
+    name: mercado-auto-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: ADMIN_API_KEY
+        sync: false
+
+      - key: DATABASE_URL
+        sync: false
+
+      - key: PGSSL
+        value: "true"
+
+      - key: CJ_ACCESS_TOKEN
+        sync: false
+
+      - key: CAMERPAY_API_BASE_URL
+        sync: false
+
+      - key: CAMERPAY_API_TOKEN
+        sync: false
