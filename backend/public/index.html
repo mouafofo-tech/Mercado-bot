@@ -1,0 +1,471 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101827">
+  <title>MERCADO AUTO Dashboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1120;
+      --panel: #131d30;
+      --border: #26344b;
+      --text: #edf3ff;
+      --muted: #9aaac2;
+      --blue: #72a7ff;
+      --green: #5ed6a0;
+      --red: #ff8585;
+      --yellow: #f6cf72;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px system-ui, sans-serif;
+    }
+    button, input {
+      font: inherit;
+      border-radius: 10px;
+      padding: 11px 13px;
+    }
+    input {
+      width: 100%;
+      background: #0b1425;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button {
+      border: 0;
+      background: var(--blue);
+      color: #071326;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #24344d;
+      color: var(--text);
+    }
+    header {
+      padding: 22px 16px;
+      border-bottom: 1px solid var(--border);
+      background: #101827;
+    }
+    main {
+      max-width: 1100px;
+      margin: auto;
+      padding: 18px 14px 40px;
+    }
+    h1 { font-size: 23px; margin: 0 0 5px; }
+    h2 { font-size: 17px; margin: 0 0 14px; }
+    p { line-height: 1.5; }
+    .muted { color: var(--muted); }
+    .top, .actions, .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+    .panel, .metric {
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      padding: 16px;
+      background: var(--panel);
+      min-width: 0;
+    }
+    .number {
+      display: block;
+      font-size: 28px;
+      font-weight: 750;
+      margin-top: 8px;
+      overflow-wrap: anywhere;
+    }
+    .status {
+      display: inline-block;
+      border-radius: 20px;
+      padding: 5px 9px;
+      font-size: 12px;
+      background: #26344b;
+      color: var(--muted);
+    }
+    .ok { color: var(--green); }
+    .bad { color: var(--red); }
+    .warn { color: var(--yellow); }
+    .stack { display: grid; gap: 14px; }
+    .field { display: grid; gap: 8px; margin-top: 14px; }
+    .table-wrap { overflow-x: auto; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      min-width: 420px;
+      text-align: left;
+    }
+    th, td {
+      padding: 11px 8px;
+      border-bottom: 1px solid var(--border);
+      overflow-wrap: anywhere;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .notice {
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--muted);
+      margin-top: 12px;
+      overflow-wrap: anywhere;
+    }
+    .hidden { display: none; }
+    @media (min-width: 700px) {
+      .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div>
+      <h1>🛍️ MERCADO AUTO</h1>
+      <div class="muted">Activity dashboard</div>
+    </div>
+    <span id="backendStatus" class="status">Checking server…</span>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Secure dashboard connection</h2>
+    <p class="muted">
+      Enter the ADMIN_API_KEY configured on Render to load protected
+      tasks, orders and statistics. The key is kept in memory only
+      while this page remains open.
+    </p>
+    <div class="field">
+      <label for="apiKey">Dashboard API key</label>
+      <input id="apiKey" type="password"
+        autocomplete="off" placeholder="Enter your API key">
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button id="connectBtn">Connect dashboard</button>
+      <button id="refreshBtn" class="secondary">Refresh data</button>
+    </div>
+    <div id="message" class="notice" role="status">
+      Checking backend…
+    </div>
+  </section>
+
+  <section class="grid" aria-label="Activity statistics">
+    <div class="metric">
+      <span class="muted">Total tasks</span>
+      <span id="totalTasks" class="number">—</span>
+    </div>
+    <div class="metric">
+      <span class="muted">Pending tasks</span>
+      <span id="pendingTasks" class="number warn">—</span>
+    </div>
+    <div class="metric">
+      <span class="muted">Completed tasks</span>
+      <span id="completedTasks" class="number ok">—</span>
+    </div>
+    <div class="metric">
+      <span class="muted">Failed tasks</span>
+      <span id="failedTasks" class="number bad">—</span>
+    </div>
+  </section>
+
+  <section class="two-col stack">
+    <div class="panel">
+      <h2>System status</h2>
+      <div class="row">
+        <span>Render backend</span>
+        <span id="healthStatus" class="status">Checking…</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <span>PostgreSQL</span>
+        <span id="databaseStatus" class="status">Checking…</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <span>API authentication</span>
+        <span id="authStatus" class="status">Not tested</span>
+      </div>
+      <div class="notice">
+        CJ Dropshipping, CamerPay, Telegram and Android activity
+        are not assumed to be active. They require real integrations
+        and reported status from the backend or phone app.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Statistics from backend</h2>
+      <div id="statsOutput" class="muted">
+        Connect to load statistics.
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" style="margin-top:14px">
+    <div class="top">
+      <h2>Recent tasks</h2>
+      <span id="taskCount" class="status">Not loaded</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Task</th><th>Status</th><th>Date</th></tr>
+        </thead>
+        <tbody id="tasksTable">
+          <tr><td colspan="3" class="muted">Connect to load tasks.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" style="margin-top:14px">
+    <div class="top">
+      <h2>Recent orders</h2>
+      <span id="orderCount" class="status">Not loaded</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Order</th><th>Status</th><th>Date</th></tr>
+        </thead>
+        <tbody id="ordersTable">
+          <tr><td colspan="3" class="muted">Connect to load orders.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <p class="muted" style="font-size:12px;margin-top:20px">
+    Last refresh: <span id="lastRefresh">Never</span>.
+    The dashboard displays information returned by your backend;
+    it does not itself execute TikTok actions or payments.
+  </p>
+</main>
+
+<script>
+(() => {
+  const API = window.location.origin;
+  let apiKey = "";
+
+  const $ = id => document.getElementById(id);
+
+  function setStatus(id, text, kind = "") {
+    const el = $(id);
+    el.textContent = text;
+    el.className = "status " + kind;
+  }
+
+  function showMessage(text, kind = "") {
+    $("message").textContent = text;
+    $("message").className = "notice " + kind;
+  }
+
+  async function request(path, protectedRoute = true) {
+    const headers = {};
+    if (protectedRoute && apiKey) headers["x-api-key"] = apiKey;
+
+    const response = await fetch(API + path, {
+      method: "GET",
+      headers,
+      cache: "no-store"
+    });
+
+    const text = await response.text();
+    let data;
+    try { data = text ? JSON.parse(text) : {}; }
+    catch { data = { message: text }; }
+
+    if (!response.ok) {
+      const error = new Error(
+        data.error || data.message || ("HTTP " + response.status)
+      );
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+
+  function asList(data, names) {
+    if (Array.isArray(data)) return data;
+    for (const name of names) {
+      if (Array.isArray(data?.[name])) return data[name];
+    }
+    if (Array.isArray(data?.data)) return data.data;
+    return [];
+  }
+
+  function first(obj, keys, fallback = "—") {
+    for (const key of keys) {
+      const value = obj?.[key];
+      if (value !== undefined && value !== null && value !== "") {
+        return value;
+      }
+    }
+    return fallback;
+  }
+
+  function statusOf(item) {
+    return String(first(item, ["status", "state"], "pending"))
+      .toLowerCase().replaceAll("_", " ");
+  }
+
+  function dateOf(item) {
+    const raw = first(item, [
+      "created_at", "createdAt", "created", "updated_at", "updatedAt"
+    ], "");
+    if (!raw) return "—";
+    const date = new Date(raw);
+    return Number.isNaN(date.getTime()) ? String(raw) :
+      date.toLocaleString();
+  }
+
+  function escapeHTML(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      '"': "&quot;", "'": "&#39;"
+    })[char]);
+  }
+
+  function renderTable(id, items, type) {
+    const tbody = $(id);
+    const labelKeys = type === "task"
+      ? ["title", "name", "type", "action", "description", "id"]
+      : ["order_number", "orderNumber", "reference", "product_name",
+         "productName", "id"];
+
+    if (!items.length) {
+      tbody.innerHTML =
+        '<tr><td colspan="3" class="muted">No records found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = items.slice(0, 30).map(item => {
+      const label = first(item, labelKeys, type === "task" ? "Task" : "Order");
+      const status = statusOf(item);
+      const safeLabel = escapeHTML(label);
+      const safeStatus = escapeHTML(status);
+      const safeDate = escapeHTML(dateOf(item));
+      return `<tr>
+        <td>${safeLabel}</td>
+        <td>${safeStatus}</td>
+        <td>${safeDate}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function updateCounts(tasks) {
+    const status = tasks.map(statusOf);
+    const done = s => ["done", "completed", "success", "succeeded"].includes(s);
+    const failed = s => ["error", "failed", "failure"].includes(s);
+    const pending = s => [
+      "pending", "queued", "waiting", "new", "in progress", "processing"
+    ].includes(s);
+
+    $("totalTasks").textContent = tasks.length;
+    $("completedTasks").textContent = status.filter(done).length;
+    $("failedTasks").textContent = status.filter(failed).length;
+    $("pendingTasks").textContent = status.filter(pending).length;
+  }
+
+  function safeStatsHTML(stats) {
+    if (!stats || typeof stats !== "object") {
+      return '<span class="muted">No statistics returned.</span>';
+    }
+    const entries = Object.entries(stats).slice(0, 20);
+    if (!entries.length) return "No statistics available.";
+    return entries.map(([key, value]) =>
+      `<div class="row" style="margin:8px 0">
+        <span>${escapeHTML(key)}</span>
+        <strong>${escapeHTML(
+          typeof value === "object" ? JSON.stringify(value) : value
+        )}</strong>
+      </div>`
+    ).join("");
+  }
+
+  async function checkHealth() {
+    try {
+      const health = await request("/health", false);
+      setStatus("backendStatus", "Backend online", "ok");
+      setStatus("healthStatus", "Online", "ok");
+      const connected = health.database === "connected";
+      setStatus("databaseStatus",
+        health.database || "Not reported", connected ? "ok" : "warn");
+    } catch (error) {
+      setStatus("backendStatus", "Backend unavailable", "bad");
+      setStatus("healthStatus", "Unavailable", "bad");
+      setStatus("databaseStatus", "Unknown", "warn");
+    }
+  }
+
+  async function loadDashboard() {
+    apiKey = $("apiKey").value.trim();
+    if (!apiKey) {
+      showMessage("Enter your ADMIN_API_KEY to access protected API routes.", "warn");
+      return;
+    }
+
+    $("connectBtn").disabled = true;
+    $("refreshBtn").disabled = true;
+    showMessage("Loading tasks, orders and statistics…");
+
+    try {
+      const results = await Promise.all([
+        request("/api/tasks"),
+        request("/api/orders"),
+        request("/api/stats")
+      ]);
+
+      const tasks = asList(results[0], ["tasks", "items", "results"]);
+      const orders = asList(results[1], ["orders", "items", "results"]);
+      const stats = results[2];
+
+      updateCounts(tasks);
+      renderTable("tasksTable", tasks, "task");
+      renderTable("ordersTable", orders, "order");
+      $("taskCount").textContent = tasks.length + " loaded";
+      $("orderCount").textContent = orders.length + " loaded";
+      $("statsOutput").innerHTML = safeStatsHTML(stats);
+      setStatus("authStatus", "Accepted", "ok");
+      showMessage("Dashboard data loaded successfully.", "ok");
+      $("lastRefresh").textContent = new Date().toLocaleString();
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        setStatus("authStatus", "Rejected", "bad");
+        showMessage("API key rejected. Check ADMIN_API_KEY on Render and try again.", "bad");
+      } else {
+        setStatus("authStatus", "Request failed", "bad");
+        showMessage(
+          "Could not load dashboard data: " + error.message +
+          ". Check your API routes and Render logs.", "bad"
+        );
+      }
+    } finally {
+      $("connectBtn").disabled = false;
+      $("refreshBtn").disabled = false;
+    }
+  }
+
+  $("connectBtn").addEventListener("click", loadDashboard);
+  $("refreshBtn").addEventListener("click", async () => {
+    await checkHealth();
+    await loadDashboard();
+  });
+
+  checkHealth();
+  setInterval(checkHealth, 60000);
+})();
+</script>
+</body>
+</html>
