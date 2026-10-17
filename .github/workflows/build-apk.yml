@@ -1,0 +1,46 @@
+
+name: Build MERCADO AUTO APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Trouver Gradle
+        run: |
+          if [ ! -f gradlew ]; then
+            echo "ERREUR: gradlew absent a la racine."
+            find . -maxdepth 4 \( -name gradlew -o -name settings.gradle -o -name settings.gradle.kts \) -print
+            exit 1
+          fi
+          chmod +x gradlew
+
+      - name: Compiler APK
+        run: ./gradlew assembleDebug
+
+      - name: Publier APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MERCADO-AUTO-APK
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
