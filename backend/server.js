@@ -1,647 +1,320 @@
 
-require("dotenv").config();
+"use strict";
 
 const express = require("express");
-const cors = require("cors");
+const path = require("node:path");
 const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
+const cors = require("cors");
 const { Pool } = require("pg");
-const { randomUUID, timingSafeEqual } = require("crypto");
 
 const app = express();
 
-const PORT = Number(process.env.PORT) || 3000;
-const NODE_ENV = process.env.NODE_ENV || "development";
-const API_KEY = process.env.ADMIN_API_KEY;
+const PORT = Number(process.env.PORT || 3000);
 const DATABASE_URL = process.env.DATABASE_URL;
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
+const PGSSL = process.env.PGSSL === "true";
 
-if (NODE_ENV === "production" && !API_KEY) {
-  console.error("ADMIN_API_KEY est obligatoire en production.");
+if (!DATABASE_URL) {
+  console.error("ERREUR : DATABASE_URL est absente.");
   process.exit(1);
 }
 
-if (!DATABASE_URL) {
-  console.error("DATABASE_URL est obligatoire.");
+if (process.env.NODE_ENV === "production" && !ADMIN_API_KEY) {
+  console.error("ERREUR : ADMIN_API_KEY est absente.");
   process.exit(1);
 }
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  ssl:
-    process.env.PGSSL === "true"
-      ? { rejectUnauthorized: false }
-      : undefined,
+  ssl: PGSSL ? { rejectUnauthorized: false } : false,
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
-  max: 10
+  max: 5
 });
 
 app.disable("x-powered-by");
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
-app.use(express.json({ limit: "100kb" }));
+app.use(express.json({ limit: "1mb" }));
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 300,
-    standardHeaders: "draft-8",
-    legacyHeaders: false
-  })
-);
-
-const taskStatuses = [
-  "queued",
-  "running",
-  "published",
-  "failed",
-  "needs_attention",
-  "cancelled"
-];
-
-const orderStatuses = [
-  "awaiting_payment",
-  "payment_confirmed",
-  "awaiting_review",
-  "ready_for_cj",
-  "cj_order_created",
-  "completed",
-  "failed",
-  "needs_attention"
-];
+// Affiche backend/public/index.html à la racine du site.
+app.use(express.static(path.join(__dirname, "public")));
 
 function requireApiKey(req, res, next) {
-  if (!API_KEY) {
-    if (NODE_ENV === "production") {
-      return res.status(503).json({
-        error: "API non configurée."
-      });
-    }
-
+  // En développement local uniquement, la clé peut être absente.
+  if (process.env.NODE_ENV !== "production" && !ADMIN_API_KEY) {
     return next();
   }
 
-  const supplied = req.get("x-api-key");
+  const suppliedKey = req.get("x-api-key");
 
-  if (typeof supplied !== "string") {
+  if (!ADMIN_API_KEY || suppliedKey !== ADMIN_API_KEY) {
     return res.status(401).json({
-      error: "Clé API manquante."
-    });
-  }
-
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(API_KEY);
-
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return res.status(401).json({
-      error: "Clé API invalide."
+      error: "Clé API absente ou invalide."
     });
   }
 
   next();
 }
 
+function asyncRoute(handler) {
+  return (req, res, next) =>
+    Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+// Création des tables au démarrage.
 async function initializeDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
-      id UUID PRIMARY KEY,
-      type TEXT NOT NULL,
-      caption TEXT NOT NULL DEFAULT '',
-      video_path TEXT,
-      hashtags JSONB NOT NULL DEFAULT '[]'::jsonb,
-      scheduled_at TIMESTAMPTZ,
-      status TEXT NOT NULL DEFAULT 'queued',
-      error_message TEXT,
+      id BIGSERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `);
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS tasks_status_schedule_idx
-    ON tasks (status, scheduled_at)
   `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
-      id UUID PRIMARY KEY,
-      telegram_chat_id TEXT,
-      customer_reference TEXT,
-      product_url TEXT NOT NULL,
-      product_name TEXT,
-      quantity INTEGER NOT NULL DEFAULT 1,
-      currency TEXT NOT NULL,
-      amount NUMERIC(12,2) NOT NULL,
-      status TEXT NOT NULL DEFAULT 'awaiting_payment',
-      payment_reference TEXT,
-      cj_order_id TEXT,
-      error_message TEXT,
+      id BIGSERIAL PRIMARY KEY,
+      customer_name TEXT NOT NULL DEFAULT '',
+      product_name TEXT NOT NULL DEFAULT '',
+      amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      status TEXT NOT NULL DEFAULT 'pending',
+      cj_product_url TEXT NOT NULL DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS orders_status_created_idx
-    ON orders (status, created_at DESC)
-  `);
-
-  console.log("Tables PostgreSQL initialisées.");
+  console.log("Tables PostgreSQL vérifiées.");
 }
 
-// Vérification du serveur et de la base de données.
-app.get("/health", async (req, res) => {
-  try {
-    await pool.query("SELECT 1");
+// Santé du serveur et de la base de données.
+app.get("/health", asyncRoute(async (req, res) => {
+  await pool.query("SELECT 1");
 
-    res.json({
-      ok: true,
-      service: "mercado-auto-backend",
-      database: "connected",
-      time: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error("Health check:", error.message);
+  res.json({
+    ok: true,
+    service: "mercado-auto-backend",
+    database: "connected",
+    time: new Date().toISOString()
+  });
+}));
 
-    res.status(503).json({
-      ok: false,
-      service: "mercado-auto-backend",
-      database: "unavailable"
-    });
-  }
-});
-
+// Routes protégées du tableau de bord.
 app.use("/api", requireApiKey);
 
-// Créer une tâche de publication.
-app.post("/api/tasks", async (req, res) => {
-  try {
-    const {
-      type,
-      caption,
-      videoPath,
-      hashtags,
-      scheduledAt
-    } = req.body || {};
+app.get("/api/tasks", asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    "SELECT * FROM tasks ORDER BY created_at DESC LIMIT 200"
+  );
+  res.json(result.rows);
+}));
 
-    if (type !== "publish_video") {
-      return res.status(400).json({
-        error: "type doit être publish_video."
-      });
-    }
+app.post("/api/tasks", asyncRoute(async (req, res) => {
+  const title = String(req.body.title || "").trim();
+  const description = String(req.body.description || "").trim();
 
-    if (
-      typeof caption !== "string" ||
-      caption.length > 2200
-    ) {
-      return res.status(400).json({
-        error: "caption invalide."
-      });
-    }
-
-    if (
-      videoPath != null &&
-      (typeof videoPath !== "string" || videoPath.length > 2048)
-    ) {
-      return res.status(400).json({
-        error: "videoPath invalide."
-      });
-    }
-
-    if (
-      hashtags !== undefined &&
-      (
-        !Array.isArray(hashtags) ||
-        hashtags.length > 50 ||
-        !hashtags.every(
-          (tag) => typeof tag === "string" && tag.length <= 100
-        )
-      )
-    ) {
-      return res.status(400).json({
-        error: "hashtags doit être une liste de 50 textes maximum."
-      });
-    }
-
-    let schedule = null;
-
-    if (scheduledAt != null) {
-      if (typeof scheduledAt !== "string") {
-        return res.status(400).json({
-          error: "scheduledAt doit être une date ISO."
-        });
-      }
-
-      const date = new Date(scheduledAt);
-
-      if (Number.isNaN(date.getTime())) {
-        return res.status(400).json({
-          error: "Date de programmation invalide."
-        });
-      }
-
-      schedule = date.toISOString();
-    }
-
-    const result = await pool.query(
-      `INSERT INTO tasks
-        (id, type, caption, video_path, hashtags, scheduled_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING *`,
-      [
-        randomUUID(),
-        type,
-        caption,
-        videoPath || null,
-        JSON.stringify(hashtags || []),
-        schedule
-      ]
-    );
-
-    res.status(201).json({
-      ok: true,
-      task: result.rows[0]
-    });
-  } catch (error) {
-    console.error("Create task:", error.message);
-
-    res.status(500).json({
-      error: "Impossible de créer la tâche."
-    });
-  }
-});
-
-// Consulter les tâches.
-app.get("/api/tasks", async (req, res) => {
-  try {
-    const limit = Math.min(
-      Math.max(Number.parseInt(req.query.limit, 10) || 20, 1),
-      100
-    );
-
-    const offset = Math.max(
-      Number.parseInt(req.query.offset, 10) || 0,
-      0
-    );
-
-    const { status } = req.query;
-
-    if (status && !taskStatuses.includes(status)) {
-      return res.status(400).json({
-        error: "Statut invalide.",
-        allowedStatuses: taskStatuses
-      });
-    }
-
-    const result = status
-      ? await pool.query(
-          `SELECT * FROM tasks
-           WHERE status = $1
-           ORDER BY created_at DESC
-           LIMIT $2 OFFSET $3`,
-          [status, limit, offset]
-        )
-      : await pool.query(
-          `SELECT * FROM tasks
-           ORDER BY created_at DESC
-           LIMIT $1 OFFSET $2`,
-          [limit, offset]
-        );
-
-    res.json({
-      ok: true,
-      tasks: result.rows,
-      limit,
-      offset
-    });
-  } catch (error) {
-    console.error("List tasks:", error.message);
-
-    res.status(500).json({
-      error: "Impossible de récupérer les tâches."
-    });
-  }
-});
-
-// Mettre à jour le statut d'une tâche.
-app.patch("/api/tasks/:id/status", async (req, res) => {
-  try {
-    const { status, errorMessage } = req.body || {};
-
-    if (!taskStatuses.includes(status)) {
-      return res.status(400).json({
-        error: "Statut de tâche invalide.",
-        allowedStatuses: taskStatuses
-      });
-    }
-
-    if (
-      errorMessage !== undefined &&
-      (
-        typeof errorMessage !== "string" ||
-        errorMessage.length > 1000
-      )
-    ) {
-      return res.status(400).json({
-        error: "errorMessage invalide."
-      });
-    }
-
-    const result = await pool.query(
-      `UPDATE tasks
-       SET status = $1,
-           error_message = $2,
-           updated_at = NOW()
-       WHERE id = $3
-       RETURNING *`,
-      [status, errorMessage || null, req.params.id]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({
-        error: "Tâche introuvable."
-      });
-    }
-
-    res.json({
-      ok: true,
-      task: result.rows[0]
-    });
-  } catch (error) {
-    console.error("Update task:", error.message);
-
-    res.status(500).json({
-      error: "Impossible de mettre à jour la tâche."
-    });
-  }
-});
-
-// Enregistrer une commande MERCADO.
-// Cette route ne confirme PAS le paiement et ne commande PAS chez CJ.
-app.post("/api/orders", async (req, res) => {
-  try {
-    const {
-      telegramChatId,
-      customerReference,
-      productUrl,
-      productName,
-      quantity,
-      currency,
-      amount
-    } = req.body || {};
-
-    if (
-      typeof productUrl !== "string" ||
-      productUrl.length > 2048 ||
-      !/^https:\/\/\S+$/i.test(productUrl)
-    ) {
-      return res.status(400).json({
-        error: "productUrl doit être une URL HTTPS valide."
-      });
-    }
-
-    if (
-      !Number.isInteger(quantity) ||
-      quantity < 1 ||
-      quantity > 100
-    ) {
-      return res.status(400).json({
-        error: "quantity doit être un entier entre 1 et 100."
-      });
-    }
-
-    if (
-      typeof currency !== "string" ||
-      !/^[A-Z]{3}$/.test(currency)
-    ) {
-      return res.status(400).json({
-        error: "currency doit être un code ISO, par exemple USD."
-      });
-    }
-
-    const numericAmount = Number(amount);
-
-    if (
-      !Number.isFinite(numericAmount) ||
-      numericAmount <= 0 ||
-      numericAmount > 100000000
-    ) {
-      return res.status(400).json({
-        error: "amount invalide."
-      });
-    }
-
-    if (
-      telegramChatId != null &&
-      String(telegramChatId).length > 100
-    ) {
-      return res.status(400).json({
-        error: "telegramChatId invalide."
-      });
-    }
-
-    const result = await pool.query(
-      `INSERT INTO orders (
-        id,
-        telegram_chat_id,
-        customer_reference,
-        product_url,
-        product_name,
-        quantity,
-        currency,
-        amount
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *`,
-      [
-        randomUUID(),
-        telegramChatId == null ? null : String(telegramChatId),
-        customerReference || null,
-        productUrl,
-        typeof productName === "string"
-          ? productName.slice(0, 250)
-          : null,
-        quantity,
-        currency,
-        numericAmount
-      ]
-    );
-
-    res.status(201).json({
-      ok: true,
-      message: "Commande enregistrée. Paiement à vérifier.",
-      order: result.rows[0]
-    });
-  } catch (error) {
-    console.error("Create order:", error.message);
-
-    res.status(500).json({
-      error: "Impossible d'enregistrer la commande."
-    });
-  }
-});
-
-// Consulter les commandes.
-app.get("/api/orders", async (req, res) => {
-  try {
-    const limit = Math.min(
-      Math.max(Number.parseInt(req.query.limit, 10) || 20, 1),
-      100
-    );
-
-    const offset = Math.max(
-      Number.parseInt(req.query.offset, 10) || 0,
-      0
-    );
-
-    const { status } = req.query;
-
-    if (status && !orderStatuses.includes(status)) {
-      return res.status(400).json({
-        error: "Statut de commande invalide.",
-        allowedStatuses: orderStatuses
-      });
-    }
-
-    const result = status
-      ? await pool.query(
-          `SELECT * FROM orders
-           WHERE status = $1
-           ORDER BY created_at DESC
-           LIMIT $2 OFFSET $3`,
-          [status, limit, offset]
-        )
-      : await pool.query(
-          `SELECT * FROM orders
-           ORDER BY created_at DESC
-           LIMIT $1 OFFSET $2`,
-          [limit, offset]
-        );
-
-    res.json({
-      ok: true,
-      orders: result.rows,
-      limit,
-      offset
-    });
-  } catch (error) {
-    console.error("List orders:", error.message);
-
-    res.status(500).json({
-      error: "Impossible de récupérer les commandes."
-    });
-  }
-});
-
-// Les statuts financiers ne peuvent pas être modifiés par cette route.
-// Ils doivent être mis à jour après vérification côté serveur
-// via une intégration officielle CamerPay ou CJ.
-app.patch("/api/orders/:id/status", async (req, res) => {
-  return res.status(501).json({
-    error: "Mise à jour financière désactivée.",
-    message:
-      "Intègre d'abord la vérification officielle CamerPay/CJ avant de modifier le statut."
-  });
-});
-
-// Statistiques.
-app.get("/api/stats", async (req, res) => {
-  try {
-    const [taskResult, orderResult] = await Promise.all([
-      pool.query(`
-        SELECT
-          COUNT(*)::int AS total,
-          COUNT(*) FILTER (WHERE status = 'queued')::int AS queued,
-          COUNT(*) FILTER (WHERE status = 'running')::int AS running,
-          COUNT(*) FILTER (WHERE status = 'published')::int AS published,
-          COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
-          COUNT(*) FILTER (
-            WHERE status = 'needs_attention'
-          )::int AS needs_attention
-        FROM tasks
-      `),
-      pool.query(`
-        SELECT
-          COUNT(*)::int AS total,
-          COUNT(*) FILTER (
-            WHERE status = 'awaiting_payment'
-          )::int AS awaiting_payment,
-          COUNT(*) FILTER (
-            WHERE status = 'payment_confirmed'
-          )::int AS payment_confirmed,
-          COUNT(*) FILTER (
-            WHERE status = 'completed'
-          )::int AS completed,
-          COUNT(*) FILTER (
-            WHERE status = 'failed'
-          )::int AS failed
-        FROM orders
-      `)
-    ]);
-
-    res.json({
-      ok: true,
-      tasks: taskResult.rows[0],
-      orders: orderResult.rows[0]
-    });
-  } catch (error) {
-    console.error("Stats:", error.message);
-
-    res.status(500).json({
-      error: "Impossible de récupérer les statistiques."
-    });
-  }
-});
-
-app.use((req, res) => {
-  res.status(404).json({
-    error: "Route introuvable."
-  });
-});
-
-app.use((error, req, res, next) => {
-  if (res.headersSent) {
-    return next(error);
+  if (!title) {
+    return res.status(400).json({ error: "Le titre est obligatoire." });
   }
 
-  if (error instanceof SyntaxError && "body" in error) {
+  const result = await pool.query(
+    `INSERT INTO tasks (title, description)
+     VALUES ($1, $2) RETURNING *`,
+    [title, description]
+  );
+
+  res.status(201).json(result.rows[0]);
+}));
+
+app.patch("/api/tasks/:id/status", asyncRoute(async (req, res) => {
+  const id = req.params.id;
+  const status = String(req.body.status || "").trim();
+  const allowed = ["pending", "in_progress", "completed", "failed"];
+
+  if (!/^\d+$/.test(id)) {
+    return res.status(400).json({ error: "ID invalide." });
+  }
+
+  if (!allowed.includes(status)) {
     return res.status(400).json({
-      error: "JSON invalide."
+      error: "Statut invalide.",
+      allowed
     });
   }
 
-  console.error("Unexpected error:", error.message);
+  const result = await pool.query(
+    `UPDATE tasks
+     SET status = $1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [status, id]
+  );
+
+  if (!result.rowCount) {
+    return res.status(404).json({ error: "Tâche introuvable." });
+  }
+
+  res.json(result.rows[0]);
+}));
+
+app.get("/api/orders", asyncRoute(async (req, res) => {
+  const result = await pool.query(
+    "SELECT * FROM orders ORDER BY created_at DESC LIMIT 200"
+  );
+  res.json(result.rows);
+}));
+
+app.post("/api/orders", asyncRoute(async (req, res) => {
+  const customerName = String(req.body.customer_name || "").trim();
+  const productName = String(req.body.product_name || "").trim();
+  const amount = Number(req.body.amount ?? 0);
+  const currency = String(req.body.currency || "USD").trim().toUpperCase();
+  const cjProductUrl = String(req.body.cj_product_url || "").trim();
+
+  if (!productName) {
+    return res.status(400).json({
+      error: "Le nom du produit est obligatoire."
+    });
+  }
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    return res.status(400).json({ error: "Montant invalide." });
+  }
+
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    return res.status(400).json({ error: "Devise invalide." });
+  }
+
+  if (cjProductUrl) {
+    try {
+      const url = new URL(cjProductUrl);
+      if (url.protocol !== "https:" ||
+          !/(^|\.)cjdropshipping\.com$/i.test(url.hostname)) {
+        return res.status(400).json({
+          error: "Le lien produit CJ doit utiliser le domaine officiel HTTPS."
+        });
+      }
+    } catch {
+      return res.status(400).json({ error: "Lien CJ invalide." });
+    }
+  }
+
+  const result = await pool.query(
+    `INSERT INTO orders
+      (customer_name, product_name, amount, currency, cj_product_url)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [customerName, productName, amount, currency, cjProductUrl]
+  );
+
+  res.status(201).json(result.rows[0]);
+}));
+
+app.patch("/api/orders/:id/status", asyncRoute(async (req, res) => {
+  const id = req.params.id;
+  const status = String(req.body.status || "").trim();
+  const allowed = [
+    "pending",
+    "paid",
+    "processing",
+    "shipped",
+    "completed",
+    "cancelled",
+    "failed"
+  ];
+
+  if (!/^\d+$/.test(id)) {
+    return res.status(400).json({ error: "ID invalide." });
+  }
+
+  if (!allowed.includes(status)) {
+    return res.status(400).json({
+      error: "Statut invalide.",
+      allowed
+    });
+  }
+
+  const result = await pool.query(
+    `UPDATE orders
+     SET status = $1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING *`,
+    [status, id]
+  );
+
+  if (!result.rowCount) {
+    return res.status(404).json({ error: "Commande introuvable." });
+  }
+
+  res.json(result.rows[0]);
+}));
+
+app.get("/api/stats", asyncRoute(async (req, res) => {
+  const [tasks, orders] = await Promise.all([
+    pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+      FROM tasks
+    `),
+    pool.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+        COUNT(*) FILTER (WHERE status = 'paid')::int AS paid,
+        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+      FROM orders
+    `)
+  ]);
+
+  res.json({
+    tasks: tasks.rows[0],
+    orders: orders.rows[0]
+  });
+}));
+
+// Route de secours : doit rester après les autres routes.
+app.use((req, res) => {
+  res.status(404).json({ error: "Route introuvable." });
+});
+
+// Gestion des erreurs.
+app.use((err, req, res, next) => {
+  console.error("Erreur serveur :", err.message);
+
+  if (res.headersSent) {
+    return next(err);
+  }
 
   res.status(500).json({
     error: "Erreur interne du serveur."
   });
 });
 
-let server;
-
 async function start() {
   await initializeDatabase();
 
-  server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`MERCADO AUTO écoute sur le port ${PORT}.`);
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`MERCADO AUTO écoute sur le port ${PORT}`);
   });
 }
 
-async function shutdown(signal) {
-  console.log(`${signal} reçu. Arrêt du serveur...`);
+start().catch((err) => {
+  console.error("Démarrage impossible :", err.message);
+  process.exit(1);
+});
 
-  if (server) {
-    await new Promise((resolve) => server.close(resolve));
-  }
-
+async function shutdown() {
   await pool.end();
   process.exit(0);
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
-
-start().catch((error) => {
-  console.error("Démarrage impossible:", error.message);
-  process.exit(1);
-});
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
